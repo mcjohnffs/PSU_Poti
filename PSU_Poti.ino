@@ -1,69 +1,127 @@
-/* @file EventSerialKeypad.pde
- || @version 1.0
- || @author Alexander Brevig
- || @contact alexanderbrevig@gmail.com
- ||
- || @description
- || | Demonstrates using the KeypadEvent.
- || #
- */
-#include <Keypad.h>
+/////////////////////////////////////////////////////////////////////////////
+// Sharp GP2Y1014AU0F Dust Sensor Demo
+//
+// Board Connection:
+//   GP2Y1014    Arduino
+//   V-LED       Between R1 and C1
+//   LED-GND     C1 and GND
+//   LED         Pin 7
+//   S-GND       GND
+//   Vo          A5
+//   Vcc         5V
+//
+// Serial monitor setting:
+//   9600 baud
+/////////////////////////////////////////////////////////////////////////////
 
+// Choose program options.
+//#define PRINT_RAW_DATA
+#define USE_AVG
 
-const byte ROWS = 4; //four rows
-const byte COLS = 4; //three columns
-char keys[ROWS][COLS] = {
-    {'1', '2', '3', 'A'},
-    {'4', '5', '6', 'B'},
-    {'7', '8', '9', 'C'},
-    {'*', '0', '#', 'D'}};
+// Arduino pin numbers.
+const int sharpLEDPin = 7;   // Arduino digital pin 7 connect to sensor LED.
+const int sharpVoPin = A5;   // Arduino analog pin 5 connect to sensor Vo.
 
-byte rowPins[ROWS] = {12, 14, 27, 26}; //connect to the row pinouts of the keypad
-byte colPins[COLS] = {25, 33, 32, 35}; //connect to the column pinouts of the keypad
+// For averaging last N raw voltage readings.
+#ifdef USE_AVG
+#define N 100
+static unsigned long VoRawTotal = 0;
+static int VoRawCount = 0;
+#endif // USE_AVG
 
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+// Set the typical output voltage in Volts when there is zero dust. 
+static float Voc = 0.6;
 
+// Use the typical sensitivity in units of V per 100ug/m3.
+const float K = 0.5;
+  
+/////////////////////////////////////////////////////////////////////////////
 
-
-
-char lesen;
-
-#define I2C_SDA 21
-#define I2C_SCL 22
-
-void setup()
-{
-    Wire.begin(I2C_SDA, I2C_SCL);
-    Serial.begin(9600);
-    pinMode(ledPin, OUTPUT);              // Sets the digital pin as output.
-    digitalWrite(ledPin, HIGH);           // Turn the LED on.
-    ledPin_state = digitalRead(ledPin);   // Store initial LED state. HIGH when LED is on.
-    keypad.addEventListener(keypadEvent); // Add an event listener for this keypad
+// Helper functions to print a data value to the serial monitor.
+void printValue(String text, unsigned int value, bool isLast = false) {
+  Serial.print(text);
+  Serial.print("=");
+  Serial.print(value);
+  if (!isLast) {
+    Serial.print(", ");
+  }
+}
+void printFValue(String text, float value, String units, bool isLast = false) {
+  Serial.print(text);
+  Serial.print("=");
+  Serial.print(value);
+  Serial.print(units);
+  if (!isLast) {
+    Serial.print(", ");
+  }
 }
 
-void loop()
-{
-    char key = keypad.getKey();
+/////////////////////////////////////////////////////////////////////////////
 
+// Arduino setup function.
+void setup() {
+  // Set LED pin for output.
+  pinMode(sharpLEDPin, OUTPUT);
+  
+  // Start the hardware serial port for the serial monitor.
+  Serial.begin(9600);
+  
+  // Wait two seconds for startup.
+  delay(2000);
+  Serial.println("");
+  Serial.println("GP2Y1014AU0F Demo");
+  Serial.println("=================");
 }
 
-// Taking care of some special events.
-void keypadEvent(KeypadEvent key)
-{
-    switch (keypad.getState())
-    {
-    case PRESSED:
-        if (key == '1')
-        {
+// Arduino main loop.
+void loop() {  
+  // Turn on the dust sensor LED by setting digital pin LOW.
+  digitalWrite(sharpLEDPin, LOW);
 
-   
-        }
-        break;
+  // Wait 0.28ms before taking a reading of the output voltage as per spec.
+  delayMicroseconds(280);
 
-        if (key == '2')
-        {
+  // Record the output voltage. This operation takes around 100 microseconds.
+  int VoRaw = analogRead(sharpVoPin);
+  
+  // Turn the dust sensor LED off by setting digital pin HIGH.
+  digitalWrite(sharpLEDPin, HIGH);
 
-        }
-        break;
-    }
-}
+  // Wait for remainder of the 10ms cycle = 10000 - 280 - 100 microseconds.
+  delayMicroseconds(9620);
+  
+  // Print raw voltage value (number from 0 to 1023).
+  #ifdef PRINT_RAW_DATA
+  printValue("VoRaw", VoRaw, true);
+  Serial.println("");
+  #endif // PRINT_RAW_DATA
+  
+  // Use averaging if needed.
+  float Vo = VoRaw;
+  #ifdef USE_AVG
+  VoRawTotal += VoRaw;
+  VoRawCount++;
+  if ( VoRawCount >= N ) {
+    Vo = 1.0 * VoRawTotal / N;
+    VoRawCount = 0;
+    VoRawTotal = 0;
+  } else {
+    return;
+  }
+  #endif // USE_AVG
+
+  // Compute the output voltage in Volts.
+  Vo = Vo / 1024.0 * 5.0;
+  printFValue("Vo", Vo*1000.0, "mV");
+
+  // Convert to Dust Density in units of ug/m3.
+  float dV = Vo - Voc;
+  if ( dV < 0 ) {
+    dV = 0;
+    Voc = Vo;
+  }
+  float dustDensity = dV / K * 100.0;
+  printFValue("DustDensity", dustDensity, "ug/m3", true);
+  Serial.println("");
+  
+} // END PROGRAM
